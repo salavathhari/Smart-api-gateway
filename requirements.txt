@@ -1,0 +1,14 @@
+# Gateway core
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+httpx==0.28.0
+pydantic-settings==2.6.1
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+
+# Future phases (install when ready)
+# redis==5.2.1
+# asyncpg==0.30.0
+# openai==1.57.4

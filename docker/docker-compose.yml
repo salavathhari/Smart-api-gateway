@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - AUTH_SERVICE_URL=http://auth:9001
+      - CHAT_SERVICE_URL=http://chat:9002
+      - AI_SERVICE_URL=http://ai:9003
+      - ENVIRONMENT=development
+    depends_on:
+      - auth
+      - chat
+      - ai
+    volumes:
+      - ..:/app
+    command: uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
+
+  auth:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: python -m services.auth_service.main
+    ports:
+      - "9001:9001"
+
+  chat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: python -m services.chat_service.main
+    ports:
+      - "9002:9002"
+
+  ai:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: python -m services.ai_service.main
+    ports:
+      - "9003:9003"
