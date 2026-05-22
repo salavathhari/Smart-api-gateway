@@ -21,6 +21,7 @@ from gateway.logger import GatewayLogger
 from gateway.database import db_manager
 from gateway.auth import validate_token
 from gateway.rate_limit import is_rate_limited
+from gateway.circuit_breaker import circuit_breaker
 
 
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
@@ -101,6 +102,18 @@ async def gateway_logic_middleware(request: Request, call_next):
         try:
             user_payload = validate_token(request)
             if not user_payload:
+                logger: GatewayLogger = request.app.state.logger
+                elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+                await logger.log(
+                    request_id=request.state.request_id,
+                    method=request.method,
+                    path=request.url.path,
+                    service="AUTH",
+                    upstream="NONE",
+                    status=401,
+                    latency_ms=elapsed_ms,
+                    error="unauthorized"
+                )
                 return JSONResponse(
                     status_code=401,
                     content={"error": "unauthorized", "message": "Authentication required"}
@@ -139,7 +152,18 @@ async def gateway_logic_middleware(request: Request, call_next):
 # ── Health check ──────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Gateway"])
-async def health_check():
+async def health_check(request: Request):
+    logger: GatewayLogger = request.app.state.logger
+    elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+    await logger.log(
+        request_id=request.state.request_id,
+        method="GET",
+        path="/health",
+        service="GATEWAY",
+        upstream="INTERNAL",
+        status=200,
+        latency_ms=elapsed_ms
+    )
     return {"status": "ok", "service": "smart-api-gateway", "phase": 1}
 
 
@@ -148,6 +172,39 @@ async def list_routes(request: Request):
     """Return the current routing table so you can inspect it at runtime."""
     router: GatewayRouter = request.app.state.router
     return {"routes": router.describe()}
+
+@app.get("/dashboard/logs", tags=["Monitoring"])
+async def get_logs(request: Request, limit: int = 50):
+    """Retrieve structured logs from MongoDB (Day 7)."""
+    logger: GatewayLogger = request.app.state.logger
+    logs = await logger.get_persisted_logs(limit)
+    return {
+        "count": len(logs),
+        "limit": limit,
+        "logs": logs,
+        "stats": logger.stats()
+    }
+
+
+@app.get("/dashboard/logs", tags=["Dashboard"])
+async def get_dashboard_logs(limit: int = 100):
+    """Retrieve the most recent logs from MongoDB."""
+    try:
+        if db_manager.db is None:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "database_unavailable", "message": "MongoDB not connected"}
+            )
+        
+        # Fetch latest logs, hide _id for JSON serialization
+        cursor = db_manager.db.logs.find({}, {"_id": 0}).sort("ts", -1).limit(limit)
+        logs = await cursor.to_list(length=limit)
+        return {"total": len(logs), "logs": logs}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "fetch_failed", "message": str(e)}
+        )
 
 
 @app.get("/gateway/debug", tags=["Gateway"])
@@ -211,117 +268,205 @@ async def cache_test():
 )
 async def proxy(request: Request, full_path: str):
     """
-    Core reverse-proxy handler.
+    Core reverse-proxy handler with Redis caching.
     Delegates forward to targeted service.
     """
     router: GatewayRouter = request.app.state.router
     pool_manager: ConnectionPoolManager = request.app.state.pool_manager
     logger: GatewayLogger = request.app.state.logger
+    redis = db_manager.redis
 
-    # 1. Route resolution
-    upstream_url, service_name = router.resolve(request.url.path)
-    if upstream_url is None:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": "no_route",
-                "message": f"No upstream configured for path: /{full_path}",
-                "path": f"/{full_path}",
-            },
-        )
-
-    # 2. Forward the request
     try:
-        client: httpx.AsyncClient = pool_manager.get_client(service_name)
+        # 1. Route resolution
+        upstream_url, service_name = router.resolve(request.url.path)
+        if upstream_url is None:
+            # Log resolution failure
+            elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+            await logger.log(
+                request_id=request.state.request_id,
+                method=request.method,
+                path=request.url.path,
+                service="NONE",
+                upstream="NONE",
+                status=404,
+                latency_ms=elapsed_ms,
+                error="no_route"
+            )
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "no_route",
+                    "message": f"No upstream configured for path: /{full_path}",
+                    "path": f"/{full_path}",
+                },
+            )
 
-        # Re-assemble query string
-        target_url = upstream_url
-        if request.url.query:
-            target_url = f"{upstream_url}?{request.url.query}"
+        # 2. Cache Lookup (GET only)
+        has_cache = settings.cache_enabled and request.method in settings.cacheable_methods and redis
+        cache_key = f"cache:{request.method}:{request.url.path}:{request.url.query}"
+        
+        if has_cache:
+            cached_res = await redis.get(cache_key)
+            if cached_res:
+                data = json.loads(cached_res)
+                # Log cache hit
+                elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+                await logger.log(
+                    request_id=request.state.request_id,
+                    method=request.method,
+                    path=f"/{full_path}",
+                    service=service_name,
+                    upstream="CACHED",
+                    status=data["status"],
+                    latency_ms=elapsed_ms,
+                )
+                return Response(
+                    content=data["content"],
+                    status_code=data["status"],
+                    headers={**data["headers"], "X-Cache": "HIT"},
+                    media_type=data["headers"].get("content-type"),
+                )
 
-        body = await request.body()
-        user_payload = getattr(request.state, "user", None)
+        # 2.5 Circuit Breaker
+        if not circuit_breaker.allow_request(service_name):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "service_unavailable",
+                    "message": f"Circuit breaker is open for service: {service_name}",
+                    "retry_after": settings.circuit_breaker_recovery_timeout
+                }
+            )
 
-        # Copy headers; strip hop-by-hop headers
-        headers = {
-            k: v
-            for k, v in request.headers.items()
-            if k.lower()
-            not in {
-                "host",
-                "content-length",
-                "transfer-encoding",
-                "connection",
-                "keep-alive",
-                "upgrade",
-                "proxy-authenticate",
-                "proxy-authorization",
-                "te",
-                "trailers",
-            }
-        }
-        headers["X-Forwarded-For"] = request.client.host if request.client else "unknown"
-        headers["X-Forwarded-Host"] = request.headers.get("host", "gateway")
-        headers["X-Gateway-Service"] = service_name
+        # 3. Forward the request (with retries)
+        last_error = None
+        for attempt in range(settings.max_retries + 1):
+            try:
+                client: httpx.AsyncClient = pool_manager.get_client(service_name)
 
-        # Inject user context if authenticated (passed from middleware)
-        if user_payload:
-            headers["X-User-ID"] = str(user_payload.get("sub", ""))
-            headers["X-User-Roles"] = ",".join(user_payload.get("roles", []))
+                # Re-assemble query string
+                target_url = upstream_url
+                if request.url.query:
+                    target_url = f"{upstream_url}?{request.url.query}"
 
-        upstream_response = await client.request(
-            method=request.method,
-            url=target_url,
-            headers=headers,
-            content=body,
-            timeout=settings.request_timeout,
-        )
+                body = await request.body()
+                user_payload = getattr(request.state, "user", None)
 
-        # 3. Log
-        elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
-        await logger.log(
-            request_id=request.state.request_id,
-            method=request.method,
-            path=f"/{full_path}",
-            service=service_name,
-            upstream=upstream_url,
-            status=upstream_response.status_code,
-            latency_ms=elapsed_ms,
-        )
+                # Copy headers; strip hop-by-hop headers
+                headers = {
+                    k: v
+                    for k, v in request.headers.items()
+                    if k.lower()
+                    not in {
+                        "host",
+                        "content-length",
+                        "transfer-encoding",
+                        "connection",
+                        "keep-alive",
+                        "upgrade",
+                        "proxy-authenticate",
+                        "proxy-authorization",
+                        "te",
+                        "trailers",
+                    }
+                }
+                headers["X-Forwarded-For"] = request.client.host if request.client else "unknown"
+                headers["X-Forwarded-Host"] = request.headers.get("host", "gateway")
+                headers["X-Gateway-Service"] = service_name
+                headers["X-Retry-Attempt"] = str(attempt)
 
-        # 4. Return upstream response (strip hop-by-hop response headers)
-        excluded_response_headers = {"transfer-encoding", "connection"}
-        response_headers = {
-            k: v
-            for k, v in upstream_response.headers.items()
-            if k.lower() not in excluded_response_headers
-        }
+                # Inject user context if authenticated (passed from middleware)
+                if user_payload:
+                    headers["X-User-ID"] = str(user_payload.get("sub", ""))
+                    headers["X-User-Roles"] = ",".join(user_payload.get("roles", []))
 
-        return Response(
-            content=upstream_response.content,
-            status_code=upstream_response.status_code,
-            headers=response_headers,
-            media_type=upstream_response.headers.get("content-type"),
-        )
+                upstream_response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body,
+                    timeout=settings.request_timeout,
+                )
 
-    except httpx.ConnectError as exc:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "error": "upstream_unreachable",
-                "service": service_name,
-                "detail": str(exc),
-            },
-        )
-    except httpx.TimeoutException:
-        return JSONResponse(
-            status_code=504,
-            content={
-                "error": "upstream_timeout",
-                "service": service_name,
-                "timeout_seconds": settings.request_timeout,
-            },
-        )
+                # Record success for circuit breaker
+                if upstream_response.status_code < 500:
+                    circuit_breaker.record_success(service_name)
+                else:
+                    circuit_breaker.record_failure(service_name)
+
+                # 4. Return upstream response (strip hop-by-hop response headers)
+                excluded_response_headers = {"transfer-encoding", "connection"}
+                response_headers = {
+                    k: v
+                    for k, v in upstream_response.headers.items()
+                    if k.lower() not in excluded_response_headers
+                }
+                response_headers["X-Cache"] = "MISS"
+
+                # 5. Save to Cache if applicable
+                if has_cache and upstream_response.status_code == 200:
+                    cache_data = {
+                        "content": upstream_response.text,
+                        "status": upstream_response.status_code,
+                        "headers": dict(response_headers)
+                    }
+                    await redis.set(cache_key, json.dumps(cache_data), ex=settings.cache_ttl)
+
+                # 6. Log success
+                elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+                await logger.log(
+                    request_id=request.state.request_id,
+                    method=request.method,
+                    path=request.url.path,
+                    service=service_name,
+                    upstream=upstream_url,
+                    status=upstream_response.status_code,
+                    latency_ms=elapsed_ms,
+                )
+
+                return Response(
+                    content=upstream_response.content,
+                    status_code=upstream_response.status_code,
+                    headers=response_headers,
+                    media_type=upstream_response.headers.get("content-type"),
+                )
+
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                last_error = exc
+                circuit_breaker.record_failure(service_name)
+                
+                if attempt < settings.max_retries:
+                    wait_time = settings.retry_backoff_factor * (2 ** attempt)
+                    print(f"⚠️ Request failed ({exc}). Retrying in {wait_time}s... (Attempt {attempt+1}/{settings.max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                # If all retries fail
+                status_code = 502 if isinstance(exc, httpx.ConnectError) else 504
+                error_type = "upstream_unreachable" if isinstance(exc, httpx.ConnectError) else "upstream_timeout"
+                
+                # Log failure
+                elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+                await logger.log(
+                    request_id=request.state.request_id,
+                    method=request.method,
+                    path=f"/{full_path}",
+                    service=service_name,
+                    upstream=upstream_url,
+                    status=status_code,
+                    latency_ms=elapsed_ms,
+                    error=str(exc)
+                )
+
+                return JSONResponse(
+                    status_code=status_code,
+                    content={
+                        "error": error_type,
+                        "service": service_name,
+                        "detail": str(exc),
+                    },
+                    )
+
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(
             status_code=500,

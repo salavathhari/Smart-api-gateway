@@ -47,11 +47,34 @@ class Settings(BaseSettings):
     # ── Security ──────────────────────────────────────────────────────────────
     secret_key: str = "super-secret-gateway-key-change-me-in-production"
     jwt_algorithm: str = "HS256"
-    public_prefixes: list[str] = ["/auth/login", "/health", "/gateway"]
+    public_prefixes: list[str] = ["/auth/login", "/health", "/gateway", "/dashboard"]
+
+    # ── Reliability (Day 6) ──────────────────────────────────────────────────
+    max_retries: int = 3
+    retry_backoff_factor: float = 1.0
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_recovery_timeout: int = 30 # seconds
+
+    # ── Caching (Day 4) ──────────────────────────────────────────────────────
+    cache_enabled: bool = True
+    cache_ttl: int = 300
+    cacheable_methods: list[str] = ["GET"]
 
     # ── Rate Limiting ─────────────────────────────────────────────────────────
     rate_limit_requests: int = 10
     rate_limit_window: int = 60  # seconds
+
+    # ── Caching ───────────────────────────────────────────────────────────────
+    cache_enabled: bool = True
+    cache_ttl: int = 300  # 5 minutes default
+    cacheable_methods: list[str] = ["GET"]
+
+    # ── Reliability (Day 6) ───────────────────────────────────────────────────
+    max_retries: int = 3
+    retry_backoff_factor: float = 1.0  # exponential: wait * (2 ** retry)
+    # Circuit Breaker
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_recovery_timeout: int = 30  # seconds until half-open
 
     # ── Route table ───────────────────────────────────────────────────────────
     # Prefix → service name.  The service name is used to look up the URL
