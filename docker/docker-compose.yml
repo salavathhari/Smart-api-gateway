@@ -1,6 +1,16 @@
 version: "3.9"
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   gateway:
     build:
       context: ..
@@ -16,11 +26,16 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - ENVIRONMENT=development
     depends_on:
-      - auth
-      - user-service
-      - chat
-      - ai
-      - redis
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+      user-service:
+        condition: service_started
+      chat:
+        condition: service_started
+      ai:
+        condition: service_started
     volumes:
       - ..:/app
     command: uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
@@ -56,8 +71,7 @@ services:
     command: python -m services.ai_service.main
     ports:
       - "9003:9003"
+    environment:
+      - REDIS_URL=redis://redis:6379
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+

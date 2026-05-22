@@ -61,20 +61,18 @@ class Settings(BaseSettings):
     cacheable_methods: list[str] = ["GET"]
 
     # ── Rate Limiting ─────────────────────────────────────────────────────────
-    rate_limit_requests: int = 10
-    rate_limit_window: int = 60  # seconds
+    # Algorithm: "token_bucket" or "sliding_window"
+    rate_limiter_enabled: bool = True
+    rate_limiter_algorithm: str = "token_bucket"
+    # Requests per minute (converted to per window in rate limiter)
+    rate_limiter_rate: int = 100
+    # Max burst capacity (for token bucket)
+    rate_limiter_capacity: int = 100
+    # Window size in seconds
+    rate_limiter_window_seconds: int = 60
+    # Identifiers to exclude from rate limiting (e.g., ["127.0.0.1"])
+    rate_limiter_whitelist: list = []
 
-    # ── Caching ───────────────────────────────────────────────────────────────
-    cache_enabled: bool = True
-    cache_ttl: int = 300  # 5 minutes default
-    cacheable_methods: list[str] = ["GET"]
-
-    # ── Reliability (Day 6) ───────────────────────────────────────────────────
-    max_retries: int = 3
-    retry_backoff_factor: float = 1.0  # exponential: wait * (2 ** retry)
-    # Circuit Breaker
-    circuit_breaker_failure_threshold: int = 5
-    circuit_breaker_recovery_timeout: int = 30  # seconds until half-open
 
     # ── Route table ───────────────────────────────────────────────────────────
     # Prefix → service name.  The service name is used to look up the URL
