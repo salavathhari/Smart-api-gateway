@@ -125,10 +125,9 @@ class TokenBucketRateLimiter:
             return allowed, state
 
         except RuntimeError as e:
-            # If event loop is closed, use in-memory fallback for test isolation
+            # If event loop is closed, still log and fail-open
             if "Event loop is closed" in str(e):
-                print(f"⚠️  Rate limiter Redis error (closed event loop, using in-memory fallback): {e}")
-                # Fall back to allowing request in this scenario
+                print(f"⚠️  Rate limiter Redis error (event loop closed): {e}")
                 return True, {"error": "event_loop_closed"}
             raise
         except Exception as e:

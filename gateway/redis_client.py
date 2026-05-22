@@ -2,46 +2,45 @@ import asyncio
 import redis.asyncio as redis
 from redis.asyncio.connection import ConnectionPool
 
-# Store the current event loop to detect changes
-_current_loop = None
-_pool = None
-_redis_client = None
+# Store pool per event loop to handle test isolation
+_pools = {}
+_clients = {}
 
-def _get_or_create_client():
-    """Get or create Redis client, recreating if event loop has changed."""
-    global _current_loop, _pool, _redis_client
+def _get_redis_client_for_loop():
+    """Get or create Redis client for current event loop."""
+    global _pools, _clients
     
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        # No running loop - shouldn't happen in async context
         loop = None
     
-    # If event loop has changed (or new loop detected), recreate connection pool
-    if loop != _current_loop:
-        _current_loop = loop
-        # Disconnect old pool if it exists
-        if _pool is not None:
-            try:
-                # Trigger disconnect (don't need to await for cleanup)
-                asyncio.create_task(_pool.disconnect()) if loop else None
-            except:
-                pass
-        
-        # Create new pool
-        _pool = ConnectionPool.from_url(
+    loop_id = id(loop) if loop else None
+    
+    # Clean up old closed loops
+    _pools = {lid: p for lid, p in _pools.items() if lid and p}
+    _clients = {lid: c for lid, c in _clients.items() if lid and c}
+    
+    if loop_id and loop_id not in _clients:
+        # Create new pool and client for this loop
+        pool = ConnectionPool.from_url(
             "redis://localhost:6379/0",
             decode_responses=True,
             max_connections=10
         )
-        _redis_client = redis.Redis(connection_pool=_pool)
+        client = redis.Redis(connection_pool=pool)
+        _pools[loop_id] = pool
+        _clients[loop_id] = client
     
-    return _redis_client
+    return _clients.get(loop_id)
 
-# Lazy wrapper to ensure we always use the current event loop's client
 class RedisClientWrapper:
+    """Wrapper that gets the correct client for the current event loop."""
     def __getattr__(self, name):
-        """Delegate attribute access to the current client."""
-        client = _get_or_create_client()
-        return getattr(client, name)
+        client = _get_redis_client_for_loop()
+        if client:
+            return getattr(client, name)
+        raise RuntimeError("No Redis client available - not in async context")
 
 redis_client = RedisClientWrapper()
