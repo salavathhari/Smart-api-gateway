@@ -6,13 +6,13 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from gateway.config import settings
 
 # --- SQL Database (Postgres) ---
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
+SQL_DATABASE_URL = os.getenv(
+    "SQL_DATABASE_URL",
     "postgresql://gateway:gateway_password@localhost:5432/gateway_logs"
 )
 
 engine = create_engine(
-    DATABASE_URL,
+    SQL_DATABASE_URL,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20

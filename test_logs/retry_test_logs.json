@@ -1,0 +1,31 @@
+{
+  "test": "retry_mechanism",
+  "total_attempts": 3,
+  "final_result": "success",
+  "total_time": "~3s with backoff",
+  "logs": [
+    {
+      "timestamp": "2026-05-23T16:21:36.367274",
+      "attempt": 1,
+      "status": "failed",
+      "error": "Database connection timeout",
+      "status_code": 503
+    },
+    {
+      "timestamp": "2026-05-23T16:21:36.880200",
+      "attempt": 2,
+      "status": "failed",
+      "error": "Service unavailable",
+      "status_code": 503
+    },
+    {
+      "timestamp": "2026-05-23T16:21:37.894923",
+      "attempt": 3,
+      "status": "success",
+      "status_code": 200,
+      "data": {
+        "records": 150
+      }
+    }
+  ]
+}

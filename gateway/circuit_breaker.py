@@ -41,11 +41,11 @@ class CircuitBreaker:
         self.failure_counts: Dict[str, int] = {}
         self.last_failure_times: Dict[str, float] = {}
 
-    def get_state(self, service_name: Optional[str] = None) -> CircuitState:
-        """Get the current state of the circuit."""
+    def get_state(self, service_name: Optional[str] = None) -> str:
+        """Get the current state of the circuit (as a string)."""
         name = service_name or self.service_name
         if not name:
-            return self.state
+            return self.state.value
 
         state = self.states.get(name, CircuitState.CLOSED)
         
@@ -54,9 +54,9 @@ class CircuitBreaker:
             if time.time() - last_fail > self.recovery_timeout:
                 print(f"🔄 {name}: Circuit HALF_OPEN (recovery timeout elapsed)")
                 self.states[name] = CircuitState.HALF_OPEN
-                return CircuitState.HALF_OPEN
+                return CircuitState.HALF_OPEN.value
         
-        return state
+        return state.value
 
     def record_success(self, service_name: Optional[str] = None):
         """Reset failures on successful request."""
@@ -97,7 +97,7 @@ class CircuitBreaker:
 
     def allow_request(self, service_name: Optional[str] = None) -> bool:
         """Check if request is allowed based on circuit state."""
-        return self.get_state(service_name) != CircuitState.OPEN
+        return self.get_state(service_name) != CircuitState.OPEN.value
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """Execute function through circuit breaker (Upstream style)."""

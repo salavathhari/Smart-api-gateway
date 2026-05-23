@@ -1,0 +1,43 @@
+{
+  "test": "circuit_breaker",
+  "service": "user_service",
+  "failure_threshold": 2,
+  "recovery_timeout": 0.8,
+  "final_state": "closed",
+  "logs": [
+    {
+      "request_num": 1,
+      "timestamp": "2026-05-23T16:21:37.917014",
+      "result": "failed",
+      "failure_count": 0,
+      "circuit_state": "closed",
+      "error": "Service error"
+    },
+    {
+      "request_num": 2,
+      "timestamp": "2026-05-23T16:21:37.917014",
+      "result": "failed",
+      "failure_count": 0,
+      "circuit_state": "open",
+      "error": "Service error"
+    },
+    {
+      "request_num": 3,
+      "timestamp": "2026-05-23T16:21:37.917014",
+      "result": "rejected",
+      "failure_count": 0,
+      "circuit_state": "open",
+      "error": "Circuit breaker open"
+    },
+    {
+      "request_num": 4,
+      "timestamp": "2026-05-23T16:21:38.819742",
+      "result": "success",
+      "failure_count": 0,
+      "circuit_state": "closed",
+      "response": {
+        "users": []
+      }
+    }
+  ]
+}

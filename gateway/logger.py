@@ -47,6 +47,8 @@ class GatewayLogger:
         status: int,
         latency_ms: float,
         error: Optional[str] = None,
+        retry_count: int = 0,
+        circuit_breaker_state: str = "CLOSED",
     ) -> None:
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -57,6 +59,8 @@ class GatewayLogger:
             "upstream": upstream,
             "status": status,
             "latency_ms": round(latency_ms, 2),
+            "retry_count": retry_count,
+            "circuit_breaker_state": circuit_breaker_state,
         }
         if error:
             entry["error"] = error

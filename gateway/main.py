@@ -417,6 +417,18 @@ async def proxy(request: Request, full_path: str):
 
         # 2.5 Circuit Breaker
         if not circuit_breaker.allow_request(service_name):
+            elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+            await logger.log(
+                request_id=request.state.request_id,
+                method=request.method,
+                path=request.url.path,
+                service=service_name,
+                upstream="NONE",
+                status=503,
+                latency_ms=elapsed_ms,
+                error="circuit_breaker_open",
+                circuit_breaker_state="OPEN"
+            )
             return JSONResponse(
                 status_code=503,
                 content={
@@ -510,6 +522,8 @@ async def proxy(request: Request, full_path: str):
                     upstream=upstream_url,
                     status=upstream_response.status_code,
                     latency_ms=elapsed_ms,
+                    retry_count=attempt,
+                    circuit_breaker_state=circuit_breaker.get_state(service_name)
                 )
 
                 return Response(
@@ -543,7 +557,9 @@ async def proxy(request: Request, full_path: str):
                     upstream=upstream_url,
                     status=status_code,
                     latency_ms=elapsed_ms,
-                    error=str(exc)
+                    error=str(exc),
+                    retry_count=attempt,
+                    circuit_breaker_state=circuit_breaker.get_state(service_name)
                 )
 
                 return JSONResponse(

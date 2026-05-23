@@ -1,0 +1,40 @@
+{
+  "test": "retry_circuit_breaker_integration",
+  "service": "data_service",
+  "total_calls": 2,
+  "final_circuit_state": "open",
+  "logs": [
+    {
+      "attempt": 1,
+      "timestamp": "2026-05-23T16:21:39.040573",
+      "status": "failed",
+      "circuit_state": "open",
+      "call_count": 2,
+      "error": "API timeout"
+    },
+    {
+      "attempt": 2,
+      "timestamp": "2026-05-23T16:21:39.243911",
+      "status": "failed",
+      "circuit_state": "open",
+      "call_count": 2,
+      "error": "\ud83d\udd34 data_service: Circuit OPEN (rejecting)"
+    },
+    {
+      "attempt": 3,
+      "timestamp": "2026-05-23T16:21:39.449008",
+      "status": "failed",
+      "circuit_state": "open",
+      "call_count": 2,
+      "error": "\ud83d\udd34 data_service: Circuit OPEN (rejecting)"
+    },
+    {
+      "attempt": 4,
+      "timestamp": "2026-05-23T16:21:39.654516",
+      "status": "failed",
+      "circuit_state": "open",
+      "call_count": 2,
+      "error": "\ud83d\udd34 data_service: Circuit OPEN (rejecting)"
+    }
+  ]
+}
