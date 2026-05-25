@@ -4,8 +4,21 @@ Mock Chat Service — listens on port 9002.
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Chat Service (Mock)", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+async def root():
+    return {"message": "Mock Chat Service is running", "endpoints": ["/chat/rooms", "/chat/health"]}
 
 
 @app.get("/chat/health")

@@ -25,7 +25,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(message)s",
 )
-log = logging.getLogger("gateway")
+logger = logging.getLogger("gateway")
 
 
 class GatewayLogger:
@@ -75,7 +75,7 @@ class GatewayLogger:
 
         # Emoji-prefixed status for human-readable console output
         icon = "✅" if status < 400 else ("⚠️ " if status < 500 else "❌")
-        log.info(
+        logger.info(
             f"{icon} [{request_id}] {method} {path} → {service} "
             f"| {status} | {latency_ms:.1f}ms"
         )

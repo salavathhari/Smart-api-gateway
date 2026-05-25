@@ -3,27 +3,78 @@ Mock AI Service — listens on port 9003.
 """
 
 import uvicorn
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="AI Service (Mock)", version="1.0.0")
+app = FastAPI(title="AI Service (Ollama Powered)", version="1.1.0")
 
+# Ollama local configuration
+OLLAMA_URL = "http://localhost:11434/api/generate"
+DEFAULT_MODEL = "llama3.1:latest"
 
-@app.get("/ai/health")
-async def health():
-    return {"service": "ai", "status": "ok"}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+@app.get("/")
+async def root():
+    return {"message": "AI Service is active", "provider": "Ollama (local)", "model": DEFAULT_MODEL}
 
 @app.post("/ai/complete")
 async def complete(body: dict):
     prompt = body.get("prompt", "")
-    return {
-        "id": "cmpl-mock-001",
-        "model": "mock-gpt",
-        "prompt": prompt,
-        "completion": f"[Mock AI response to: '{prompt[:50]}...']",
-        "tokens": {"prompt": len(prompt.split()), "completion": 12},
-        "service": "ai",
-    }
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required")
+
+    try:
+        print(f"DEBUG: Calling Ollama with prompt length {len(prompt)} and timeout 300.0s")
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                OLLAMA_URL,
+                json={
+                    "model": DEFAULT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "num_predict": 100,  # Limit output length to speed up
+                        "temperature": 0.1   # More deterministic/faster
+                    }
+                }
+            )
+            
+            print(f"DEBUG: Ollama response: {response.status_code}")
+            if response.status_code != 200:
+                print(f"DEBUG: Ollama error body: {response.text}")
+                return {
+                    "error": "Ollama error",
+                    "status": response.status_code,
+                    "details": response.text
+                }
+
+            result = response.json()
+            print(f"DEBUG: Ollama json: {result}")
+            completion = result.get("response", "")
+            
+            return {
+                "id": "cmpl-ollama",
+                "model": DEFAULT_MODEL,
+                "prompt": prompt,
+                "completion": completion,
+                "service": "ai",
+            }
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"DEBUG: AI Service Exception: {error_details}")
+        return {"error": str(e), "traceback": error_details, "note": "Is Ollama running?"}
+
+@app.get("/ai/health")
+async def health():
+    return {"service": "ai", "status": "ok", "engine": "ollama"}
 
 
 @app.post("/ai/embed")

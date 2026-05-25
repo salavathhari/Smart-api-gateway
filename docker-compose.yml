@@ -1,0 +1,115 @@
+services:
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - AUTH_SERVICE_URL=http://auth:9001
+      - USER_SERVICE_URL=http://user-service:8001
+      - CHAT_SERVICE_URL=http://chat:9002
+      - AI_SERVICE_URL=http://ai:9003
+      - PRODUCTS_SERVICE_URL=http://products:9004
+      - DATABASE_URL=mongodb://mongodb:27017/smart-api-gateway
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=development
+    depends_on:
+      mongodb:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+      user-service:
+        condition: service_started
+      chat:
+        condition: service_started
+      ai:
+        condition: service_started
+    volumes:
+      - .:/app
+    command: uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - DATABASE_URL=mongodb://mongodb:27017/smart-api-gateway
+      - GATEWAY_URL=http://gateway:8000
+    depends_on:
+      - gateway
+      - mongodb
+    command: streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
+
+  auth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m services.auth_service.main
+    ports:
+      - "9001:9001"
+
+  user-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m services.user_service.main
+    ports:
+      - "8001:8001"
+
+  chat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m services.chat_service.main
+    ports:
+      - "9002:9002"
+
+  ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m services.ai_service.main
+    ports:
+      - "9003:9003"
+    environment:
+      - REDIS_URL=redis://redis:6379
+
+  products:
+    image: python:3.12-slim
+    command: >
+      python -c "from http.server import HTTPServer, BaseHTTPRequestHandler;
+      class H(BaseHTTPRequestHandler):
+          def do_GET(self):
+              self.send_response(200)
+              self.end_headers()
+              self.wfile.write(b'Products Mock OK')
+      HTTPServer(('0.0.0.0', 9004), H).serve_forever()"
+    ports:
+      - "9004:9004"
+
+volumes:
+  mongodb_data:
+
+

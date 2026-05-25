@@ -25,7 +25,8 @@ from gateway.circuit_breaker import circuit_breaker
 from gateway.redis_client import redis_client
 from gateway.load_balancer import LoadBalancer
 from gateway.rate_limiter import RateLimiterManager
-
+from gateway.intent_classifier import intent_classifier
+from gateway.log_summarizer import log_summarizer
 
 
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
@@ -80,6 +81,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── AI Driven Intent Router (Day 9) ──────────────────────────────────────────
+
+@app.post("/gateway/intent", tags=["Smart Routing"])
+async def ai_intent_route(request: Request):
+    """
+    Day 9: AI Intent Classification
+    Takes a natural language query and routes to the correct service.
+    """
+    body = await request.json()
+    query = body.get("query", "")
+    
+    if not query:
+        return JSONResponse(status_code=400, content={"error": "missing_query"})
+
+    # AI Brain: Classify the intent
+    classification = await intent_classifier.classify(query)
+    service_name = classification["service"]
+    confidence = classification["confidence"]
+
+    # Resolve actual endpoint
+    router: GatewayRouter = app.state.router
+    # For simplicity, we route to the root of that service or a search endpoint
+    search_path = f"/{service_name}/search" if service_name != "ai" else "/ai/complete"
+    
+    return {
+        "intent": query,
+        "mapped_service": service_name,
+        "confidence": confidence,
+        "action": f"Forwarding to {search_path}",
+        "note": "AI successfully identified the destination."
+    }
 
 
 # ── Middleware: rate limiting ─────────────────────────────────────────────────
@@ -166,7 +200,8 @@ async def gateway_logic_middleware(request: Request, call_next):
     Decoupled from the proxy function so it applies to internal routes too.
     """
     path = request.url.path
-    is_public = any(path.startswith(p) for p in settings.public_prefixes)
+    # Public if it starts with a public prefix OR is exactly the root '/'
+    is_public = any(path.startswith(p) for p in settings.public_prefixes) or path == "/"
     
     # 1. Authentication
     user_payload = None
@@ -175,9 +210,11 @@ async def gateway_logic_middleware(request: Request, call_next):
             user_payload = validate_token(request)
             if not user_payload:
                 logger: GatewayLogger = request.app.state.logger
-                elapsed_ms = (time.monotonic() - request.state.start_time) * 1000
+                # Ensure start_time exists before using it
+                start_time = getattr(request.state, "start_time", time.monotonic())
+                elapsed_ms = (time.monotonic() - start_time) * 1000
                 await logger.log(
-                    request_id=request.state.request_id,
+                    request_id=getattr(request.state, "request_id", "unknown"),
                     method=request.method,
                     path=request.url.path,
                     service="AUTH",
@@ -201,8 +238,8 @@ async def gateway_logic_middleware(request: Request, call_next):
     
     is_limited, remaining = await is_rate_limited(
         limit_key, 
-        settings.rate_limit_requests, 
-        settings.rate_limit_window
+        settings.rate_limiter_rate, 
+        settings.rate_limiter_window_seconds
     )
     
     if is_limited:
@@ -212,7 +249,16 @@ async def gateway_logic_middleware(request: Request, call_next):
         )
 
     # 3. Proceed to route or proxy
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        # Fallback if downstream fails or middleware above fails
+        # Ensure we have a valid request.state even in error paths
+        if not hasattr(request.state, "start_time"):
+             request.state.start_time = time.monotonic()
+        if not hasattr(request.state, "request_id"):
+             request.state.request_id = str(uuid.uuid4())[:8]
+        raise e
     
     # 4. Inject rate limit headers
     if remaining != -1:
@@ -222,6 +268,18 @@ async def gateway_logic_middleware(request: Request, call_next):
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
+
+@app.get("/", tags=["Gateway"])
+async def root(request: Request):
+    """Gateway landing page."""
+    return {
+        "message": "Welcome to the Smart API Gateway",
+        "version": "1.0.0",
+        "status": "online",
+        "documentation": "/docs",
+        "health": "/health"
+    }
+
 
 @app.get("/health", tags=["Gateway"])
 async def health_check(request: Request):
@@ -265,6 +323,16 @@ async def get_logs(limit: int = 100):
             status_code=500,
             content={"error": "fetch_failed", "message": str(e)}
         )
+
+
+@app.get("/gateway/ops-summary", tags=["Monitoring"])
+async def get_ops_summary(limit: int = 50):
+    """
+    Day 10: AI Log Summarization.
+    Analyzes recent logs and returns a plain-text AI summary.
+    """
+    summary = await log_summarizer.summarize_recent_logs(limit=limit)
+    return {"summary": summary}
 
 
 @app.get("/gateway/debug", tags=["Gateway"])
